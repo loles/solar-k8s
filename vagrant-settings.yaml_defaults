@@ -1,10 +1,10 @@
 # copy it to vagrant-settings.yaml then Vagrantfile
 # will use values from this file
 
-slaves_count: 0
+slaves_count: 2
 slaves_ram: 1024
 master_image: solar-project/solar-master
-master_image_version: null
+master_image_version: ">= 0.3.0.pre0"
 slaves_image: fc23
 slaves_image_version: null
 master_ram: 1024

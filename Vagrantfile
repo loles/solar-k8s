@@ -25,7 +25,11 @@ VAGRANTFILE_API_VERSION = "2"
 defaults_cfg = YAML.load_file('vagrant-settings.yaml_defaults')
 if File.exist?('vagrant-settings.yaml')
   custom_cfg = YAML.load_file('vagrant-settings.yaml')
-  cfg = defaults_cfg.merge(custom_cfg)
+  if custom_cfg
+    cfg = defaults_cfg.merge(custom_cfg)
+  else
+    cfg = defaults_cfg
+  end
 else
   cfg = defaults_cfg
 end
@@ -43,11 +47,7 @@ SYNC_TYPE = cfg["sync_type"]
 MASTER_CPUS = cfg["master_cpus"]
 SLAVES_CPUS = cfg["slaves_cpus"]
 PARAVIRT_PROVIDER = cfg.fetch('paravirtprovider', false)
-PREPROVISIONED = cfg.fetch('preprovisioned', true)
 SOLAR_DB_BACKEND = cfg.fetch('solar_db_backend', 'riak')
-
-# Initialize noop plugins only in case of PXE boot
-require_relative 'bootstrap/vagrant_plugins/noop' unless PREPROVISIONED
 
 def ansible_playbook_command(filename, args=[])
   "ansible-playbook -v -i \"localhost,\" -c local /vagrant/deploy/solar/bootstrap/playbooks/#{filename} #{args.join ' '}"
@@ -61,7 +61,7 @@ solar_script = ansible_playbook_command("solar.yaml")
 # NOTE(bogdando) w/a for a centos7 issue
 fix_six = shell_script("/vagrant/deploy/solar/bootstrap/playbooks/fix_centos7_six.sh")
 
-master_pxe = ansible_playbook_command("pxe.yaml")
+# master_pxe = ansible_playbook_command("pxe.yaml")
 get_solar = shell_script("/vagrant/deploy/get-solar.sh")
 
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
@@ -73,7 +73,6 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     config.vm.provision "shell", inline: get_solar
     config.vm.provision "shell", inline: fix_six, privileged: true
     config.vm.provision "shell", inline: solar_script, privileged: true, env: {"SOLAR_DB_BACKEND": SOLAR_DB_BACKEND}
-    config.vm.provision "shell", inline: master_pxe, privileged: true unless PREPROVISIONED
     config.vm.provision "file", source: "~/.vagrant.d/insecure_private_key", destination: "/vagrant/tmp/keys/ssh_private"
     config.vm.host_name = "solar-dev"
 
@@ -120,30 +119,17 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   SLAVES_COUNT.times do |i|
     index = i + 1
     ip_index = i + 3
-    config.vm.define "solar-dev#{index}" do |config|
+    config.vm.define "node-#{index}" do |config|
 
       # Standard box with all stuff preinstalled
       config.vm.box = SLAVES_IMAGE
       config.vm.box_version = SLAVES_IMAGE_VERSION
-      config.vm.host_name = "solar-dev#{index}"
+      config.vm.host_name = "node-#{index}"
 
-      if PREPROVISIONED
-        #TODO(bogdando) figure out how to configure multiple interfaces when was not PREPROVISIONED
-        ind = 0
-        SLAVES_IPS.each do |ip|
-          config.vm.network :private_network, ip: "#{ip}#{ip_index}", :dev => "solbr#{ind}", :mode => 'nat'
-          ind = ind + 1
-        end
-      else
-        # Disable attempts to install guest os and check that node is booted using ssh,
-        # because nodes will have ip addresses from dhcp, and vagrant doesn't know
-        # which ip to use to perform connection
-        config.vm.communicator = :noop
-        config.vm.guest = :noop_guest
-        # Configure network to boot vm using pxe
-        config.vm.network "private_network", adapter: 1, ip: "10.0.0.#{ip_index}"
-        config.vbguest.no_install = true
-        config.vbguest.auto_update = false
+      ind = 0
+      SLAVES_IPS.each do |ip|
+        config.vm.network :private_network, ip: "#{ip}#{ip_index}", :dev => "solbr#{ind}", :mode => 'nat'
+        ind = ind + 1
       end
 
       config.vm.provider :virtualbox do |v|
@@ -158,7 +144,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
         if PARAVIRT_PROVIDER
           v.customize ['modifyvm', :id, "--paravirtprovider", PARAVIRT_PROVIDER] # for linux guest
         end
-        v.name = "solar-dev#{index}"
+        v.name = "node-#{index}"
       end
 
       config.vm.provider :libvirt do |libvirt|
@@ -171,18 +157,15 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
         libvirt.disk_bus = "virtio"
       end
 
-      if PREPROVISIONED
-        if SYNC_TYPE == 'nfs'
-          config.vm.synced_folder ".", "/vagrant", type: "nfs"
-        end
-        if SYNC_TYPE == 'rsync'
-          config.vm.synced_folder ".", "/vagrant", type: "rsync",
+      if SYNC_TYPE == 'nfs'
+        config.vm.synced_folder ".", "/vagrant", type: "nfs"
+      end
+      if SYNC_TYPE == 'rsync'
+        config.vm.synced_folder ".", "/vagrant", type: "rsync",
           rsync__args: ["--verbose", "--archive", "--delete", "-z"]
-        end
       end
     end
   end
-
 end
 
 
